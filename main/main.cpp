@@ -1,8 +1,10 @@
+// file main.cpp
+
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
-#include <inttypes.h>  // Добавляем заголовок для макросов PRI
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -14,19 +16,17 @@
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
-#include "sf8xxx_nm_stub.h"
+#include "sf8xxx_nm.h"
 #include "proto/sf8xxx_nm.pb.h"
 
 static const char *TAG = "SF8XXX_CTRL";
 constexpr int TCP_PORT = 3333;
 constexpr int MAX_CLIENTS = 1;
-constexpr int MAX_MESSAGE_SIZE = 4096; // Максимальный размер сообщения
+constexpr int MAX_MESSAGE_SIZE = 4096;
 
-// Wi-Fi конфигурация
 #define WIFI_SSID "Homenow"
 #define WIFI_PASS "31121974"
 
-// Преобразование кодов ошибок (улучшенная версия из эмулятора)
 sf8xxx_nm::ErrorCode convert_error(sf8xxx_nm::sf8xxx_nm_err_t err) {
     switch (err) {
         case sf8xxx_nm::SF8XXX_NM_OK: return sf8xxx_nm::ERROR_UNSPECIFIED;
@@ -42,7 +42,7 @@ sf8xxx_nm::ErrorCode convert_error(sf8xxx_nm::sf8xxx_nm_err_t err) {
     }
 }
 
-// Обработка ConfigureCommand
+// Handling ConfigureCommand
 void handle_configure(const sf8xxx_nm::ConfigureCommand& config, sf8xxx_nm::DriverResponse& response) {
     sf8xxx_nm::sf8xxx_nm_err_t err = sf8xxx_nm::SF8XXX_NM_OK;
     
@@ -285,7 +285,7 @@ void handle_configure(const sf8xxx_nm::ConfigureCommand& config, sf8xxx_nm::Driv
     }
 }
 
-// Обработка RequestCommand
+// Handling RequestCommand
 void handle_request(const sf8xxx_nm::RequestCommand& request, sf8xxx_nm::DriverResponse& response) {
     sf8xxx_nm::sf8xxx_nm_err_t err = sf8xxx_nm::SF8XXX_NM_OK;
     
@@ -746,7 +746,6 @@ void handle_request(const sf8xxx_nm::RequestCommand& request, sf8xxx_nm::DriverR
             
             // Bulk requests
             case sf8xxx_nm::REQ_LDD_STATUS_ALL: {
-                // Запрос всех LDD параметров
                 float freq, freq_min, freq_max, duration, duration_min, duration_max;
                 float current, current_min, current_max, current_max_limit, measured_current, threshold, calibration;
                 float voltage;
@@ -867,7 +866,6 @@ void handle_request(const sf8xxx_nm::RequestCommand& request, sf8xxx_nm::DriverR
                 break;
             }
             case sf8xxx_nm::REQ_TEC_STATUS_ALL: {
-                // Запрос всех TEC параметров
                 float temp, temp_max, temp_min, temp_max_limit, temp_min_limit, measured_temp;
                 float current, current_limit, voltage, calibration;
                 uint16_t p, i, d;
@@ -1005,7 +1003,6 @@ void handle_request(const sf8xxx_nm::RequestCommand& request, sf8xxx_nm::DriverR
                 break;
             }
             case sf8xxx_nm::REQ_EXTERNAL_NTC_ALL: {
-                // Запрос всех параметров внешнего NTC
                 float lower, upper, measured;
                 
                 err = sf8xxx_nm::sf8xxx_nm_get_ext_ntc_temp_lower_lim(&lower);
@@ -1043,7 +1040,7 @@ void handle_request(const sf8xxx_nm::RequestCommand& request, sf8xxx_nm::DriverR
     }
 }
 
-// Обработка ActionCommand
+// Handling ActionCommand
 void handle_action(const sf8xxx_nm::ActionCommand& action, sf8xxx_nm::DriverResponse& response) {
     sf8xxx_nm::sf8xxx_nm_err_t err = sf8xxx_nm::SF8XXX_NM_OK;
     
@@ -1086,12 +1083,10 @@ void handle_action(const sf8xxx_nm::ActionCommand& action, sf8xxx_nm::DriverResp
     }
 }
 
-// Обработка клиента
 void handle_client(int sock) {
     uint8_t len_buf[4];
     
     while (true) {
-        // Читаем длину сообщения
         int r = recv(sock, len_buf, 4, 0);
         if (r <= 0) {
             ESP_LOGI(TAG, "Client disconnected (read length: %d)", r);
@@ -1104,7 +1099,6 @@ void handle_client(int sock) {
             break;
         }
         
-        // Читаем само сообщение
         std::vector<uint8_t> msg_buf(msg_len);
         r = recv(sock, msg_buf.data(), msg_len, 0);
         if (r != static_cast<int>(msg_len)) {
@@ -1112,12 +1106,10 @@ void handle_client(int sock) {
             break;
         }
         
-        // Десериализация команды
         sf8xxx_nm::DriverCommand command;
         if (!command.ParseFromArray(msg_buf.data(), msg_len)) {
             ESP_LOGE(TAG, "Failed to parse command");
             
-            // Отправка ошибки парсинга
             sf8xxx_nm::DriverResponse response;
             response.set_error_code(sf8xxx_nm::ERROR_PARSE);
             
@@ -1128,7 +1120,6 @@ void handle_client(int sock) {
             continue;
         }
         
-        // Обработка команды
         sf8xxx_nm::DriverResponse response;
         response.set_error_code(sf8xxx_nm::ERROR_UNSPECIFIED);
         
@@ -1151,11 +1142,9 @@ void handle_client(int sock) {
                 break;
         }
         
-        // Сериализация и отправка ответа
         std::string resp_str = response.SerializeAsString();
         uint32_t resp_len = htonl(resp_str.size());
         
-        // Проверка успешности отправки
         if (send(sock, &resp_len, 4, 0) < 0) {
             ESP_LOGE(TAG, "Failed to send response length");
             break;
@@ -1171,7 +1160,6 @@ void handle_client(int sock) {
     ESP_LOGI(TAG, "Client disconnected");
 }
 
-// TCP сервер
 void tcp_server_task(void* pvParameters) {
     int listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (listen_sock < 0) {
@@ -1222,7 +1210,6 @@ void tcp_server_task(void* pvParameters) {
         ESP_LOGI(TAG, "Client connected from %s:%d", 
                  inet_ntoa(source_addr.sin_addr), ntohs(source_addr.sin_port));
         
-        // Обработка клиента в текущем потоке (для простоты)
         handle_client(sock);
     }
     
@@ -1230,7 +1217,6 @@ void tcp_server_task(void* pvParameters) {
     vTaskDelete(nullptr);
 }
 
-// Обработчик событий Wi-Fi
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                              int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -1247,9 +1233,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-// Инициализация Wi-Fi
 static void wifi_init_sta(void) {
-    // Инициализация NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -1297,7 +1281,6 @@ static void wifi_init_sta(void) {
 extern "C" void app_main() {
     ESP_LOGI(TAG, "Starting SF8XXX_NM controller");
     
-    // Инициализация драйвера
     sf8xxx_nm::sf8xxx_nm_err_t err = sf8xxx_nm::sf8xxx_nm_init();
     if (err != sf8xxx_nm::SF8XXX_NM_OK) {
         ESP_LOGE(TAG, "Failed to initialize driver: %d", err);
@@ -1305,10 +1288,8 @@ extern "C" void app_main() {
     }
     ESP_LOGI(TAG, "Driver initialized successfully");
     
-    // Инициализация Wi-Fi
     wifi_init_sta();
     
-    // Запуск TCP сервера
     xTaskCreate(tcp_server_task, "tcp_server", 12288, nullptr, 5, nullptr);
     
     ESP_LOGI(TAG, "System started successfully");

@@ -1,10 +1,12 @@
+// file: sf8xxx_nm_stub.cpp
+
 #include <cstring>
 #include <cmath>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "sf8xxx_nm_stub.h"
+#include "sf8xxx_nm.h"
 
 static const char *TAG = "SF8XXX_NM";
 
