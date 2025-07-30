@@ -1,0 +1,69 @@
+menu "SF8XXX_NM Configuration"
+    config GPIO_RANGE_MAX
+		int
+		default 33 if IDF_TARGET_ESP32
+		default 46 if IDF_TARGET_ESP32S2
+		default 48 if IDF_TARGET_ESP32S3
+		default 18 if IDF_TARGET_ESP32C2
+		default 19 if IDF_TARGET_ESP32C3
+		default 30 if IDF_TARGET_ESP32C6
+		default 54 if IDF_TARGET_ESP32P4
+
+    config SF8XXX_NM_UART_PORT_NUM
+        int "UART port number"
+        default 2 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        default 1
+        range 0 2 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        range 0 1
+        help
+            Select the UART port to communicate with the SF8XXX_NM driver.
+
+    config SF8XXX_NM_UART_RXD
+        int "UART RXD pin number"
+        range 0 GPIO_RANGE_MAX
+        default 13 if IDF_TARGET_ESP32S3
+        help
+            GPIO pin for the UART RX signal connected to the driver's TXD.
+
+    config SF8XXX_NM_UART_TXD
+        int "UART TXD pin number"
+        range 0 GPIO_RANGE_MAX
+        default 12 if IDF_TARGET_ESP32S3
+        help
+            GPIO pin for the UART TX signal connected to the driver's RXD.
+
+    config SF8XXX_NM_UART_BAUDRATE
+        int "UART Baud Rate"
+        range 1200 115200
+        default 115200
+        help
+            Baud rate for the UART communication. The driver's default is 115200.
+    
+    config SF8XXX_NM_RESPONSE_TIMEOUT_MS
+        int "Response Timeout (ms)"
+        range 1 2000
+        default 100
+        help
+            Timeout in milliseconds for waiting for a response from the SF8XXX_NM driver.
+   
+    config SF8XXX_NM_RX_BUF_SIZE
+        int "UART RX Buffer Size"
+        default 256
+        range 32 1024
+        help
+            Size of the UART receive buffer in bytes.
+
+    config SF8XXX_NM_TX_BUF_SIZE
+        int "UART TX Buffer Size"
+        default 256
+        range 32 1024
+        help
+            Size of the UART transmit buffer in bytes.
+    
+    config SF8XXX_NM_DELAY_BTW_CMDS
+        int "Delay between commands (ms)"
+        range 0 1000
+        default 150
+        help
+            Delay in milliseconds to wait between sending consecutive commands to the SF8XXX_NM driver.
+endmenu

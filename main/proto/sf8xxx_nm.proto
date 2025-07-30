@@ -1,0 +1,379 @@
+syntax = "proto3";
+
+// Протокол для удаленного управления драйвером лазерного диода Maiman SF8xxx-NM.
+//
+// Версия документации: 1.1
+//
+// Протокол спроектирован для работы поверх неразрывного TCP-соединения,
+// позволяя клиенту отправлять команды и получать ответы/статусы от устройства.
+//
+// Ключевые особенности:
+// - Частичные обновления: Поля в `ConfigureCommand` являются опциональными (`optional`),
+//   что позволяет изменять только нужные параметры, не затрагивая остальные.
+// - Четкое разделение: Команды разделены на настройку (Configure), запрос (Request)
+//   и немедленные действия (Action).
+// - Абстракция: Клиент оперирует физическими величинами (Гц, мА, °C), а не
+//   кодами протокола драйвера.
+
+option optimize_for = LITE_RUNTIME;
+
+package sf8xxx_nm;
+
+// ===============================================================
+// 1. Сообщения-обертки для команд и ответов
+// ===============================================================
+
+// DriverCommand - основное сообщение, отправляемое от клиента к устройству.
+// Является контейнером для одного из трех типов команд.
+message DriverCommand {
+  oneof command {
+    ConfigureCommand configure = 1; // Команда для установки параметров драйвера.
+    RequestCommand   request = 2;   // Команда для запроса текущих значений и статусов.
+    ActionCommand    action = 3;    // Команда для выполнения немедленного действия.
+  }
+}
+
+// DriverResponse - основное сообщение, отправляемое от устройства к клиенту.
+// Формируется как ответ на каждую полученную `DriverCommand`.
+message DriverResponse {
+  // Код ошибки, если последняя операция не удалась.
+  // Если поле не установлено (значение 0), операция считается успешной.
+  // Заполняется на основе кода возврата `sf8xxx_nm_err_t` от любой функции C-библиотеки.
+  optional ErrorCode error_code = 1;
+
+  // Поля ниже заполняются только в ответ на `RequestCommand`.
+  // Если клиент запросил `REQ_LDD_STATUS_ALL` или отдельные LDD-параметры,
+  // МК должен заполнить это сообщение, вызвав соответствующие `get_*` функции.
+  optional LddStatus ldd_status = 2;
+
+  // Заполняется, если клиент запросил `REQ_TEC_STATUS_ALL` или отдельные TEC-параметры.
+  optional TecStatus tec_status = 3;
+
+  // Заполняется, если клиент запросил `REQ_DRIVER_STATE`.
+  // Соответствует результату `sf8xxx_nm_get_driver_state()`.
+  optional DriverStateInfo driver_state = 4;
+
+  // Заполняется, если клиент запросил `REQ_TEC_STATE`.
+  // Соответствует результату `sf8xxx_nm_get_tec_state()`.
+  optional TecStateInfo tec_state = 5;
+
+  // Заполняется, если клиент запросил `REQ_LOCK_STATUS`.
+  // Соответствует результату `sf8xxx_nm_get_lock_status()`.
+  optional LockStatusInfo lock_status = 6;
+  
+  // Заполняется, если клиент запросил `REQ_SERIAL_NUMBER`.
+  // Соответствует результату `sf8xxx_nm_get_serial_number()`.
+  optional uint32 serial_number = 7;
+}
+
+// ===============================================================
+// 2. Команды Конфигурации (Установка параметров)
+// ===============================================================
+
+// Содержит все возможные настройки. Все поля опциональны для частичных обновлений.
+// МК должен обрабатывать только те поля, которые установлены в полученном сообщении.
+message ConfigureCommand {
+  // Настройки LDD. Каждое поле соответствует своей `set_*()` функции.
+  optional LddSettings ldd_settings = 1;
+  // Настройки TEC. Каждое поле соответствует своей `set_*()` функции.
+  optional TecSettings tec_settings = 2;
+  // Настройки ПИД-регулятора TEC.
+  optional PidSettings pid_settings = 3;
+  // Настройки внешней NTC блокировки.
+  optional NtcInterlockSettings ntc_interlock_settings = 4;
+  // Управление битами состояния LDD. Каждое поле соответствует вызову
+  // `sf8xxx_nm_set_driver_state()` с определенным флагом.
+  optional DriverStateSettings driver_state_settings = 5;
+  // Управление битами состояния TEC.
+  optional TecStateSettings tec_state_settings = 6;
+}
+
+// ---------------- Под-сообщения для ConfigureCommand ----------------
+
+// Настройки драйвера лазерного диода (LDD)
+message LddSettings {
+  // Соответствует `sf8xxx_nm_set_freq()`.
+  optional float frequency_hz = 1;
+  // Соответствует `sf8xxx_nm_set_duration()`.
+  optional float duration_ms = 2;
+  // Соответствует `sf8xxx_nm_set_current()`.
+  optional float current_ma = 3;
+  // Соответствует `sf8xxx_nm_set_current_max()`.
+  optional float current_max_ma = 4;
+  // Соответствует `sf8xxx_nm_set_calibration_current()`.
+  optional float current_calibration_percent = 5;
+}
+
+// Настройки термоэлектрического контроллера (TEC)
+message TecSettings {
+  // Соответствует `sf8xxx_nm_set_tec_temp()`.
+  optional float temperature_celsius = 1;
+  // Соответствует `sf8xxx_nm_set_tec_temp_max()`.
+  optional float temp_max_celsius = 2;
+  // Соответствует `sf8xxx_nm_set_tec_temp_min()`.
+  optional float temp_min_celsius = 3;
+  // Соответствует `sf8xxx_nm_set_tec_current_limit()`.
+  optional float current_limit_a = 4;
+  // Соответствует `sf8xxx_nm_set_tec_calibration_current()`.
+  optional float calibration_percent = 5;
+  // Соответствует `sf8xxx_nm_set_internal_ld_ntc_sensor_b25_100()`.
+  optional uint32 internal_ntc_b_coefficient = 6;
+}
+
+// Настройки ПИД-регулятора для TEC
+message PidSettings {
+  // Соответствует `sf8xxx_nm_set_p_coefficient()`.
+  optional uint32 p_coefficient = 1;
+  // Соответствует `sf8xxx_nm_set_i_coefficient()`.
+  optional uint32 i_coefficient = 2;
+  // Соответствует `sf8xxx_nm_set_d_coefficient()`.
+  optional uint32 d_coefficient = 3;
+}
+
+// Настройки внешнего NTC термистора и связанной с ним блокировки
+message NtcInterlockSettings {
+  // Соответствует `sf8xxx_nm_set_external_ntc_sensor_temp_lower_limit()`.
+  optional float lower_limit_celsius = 1;
+  // Соответствует `sf8xxx_nm_set_external_ntc_sensor_temp_upper_limit()`.
+  optional float upper_limit_celsius = 2;
+  // Соответствует `sf8xxx_nm_set_external_ntc_sensor_b25_100()`.
+  optional uint32 b_coefficient = 3;
+}
+
+// Управление состоянием драйвера (LDD).
+// Каждое поле в этом сообщении транслируется в отдельный вызов
+// `sf8xxx_nm_set_driver_state()` с соответствующим флагом.
+message DriverStateSettings {
+  enum CurrentSetSource {
+    CURRENT_SET_SOURCE_UNSPECIFIED = 0;
+    EXTERNAL = 1; // -> SF8XXX_NM_DRIVER_STATE_WRITE_EXTERNAL_CURRENT_SET
+    INTERNAL = 2; // -> SF8XXX_NM_DRIVER_STATE_WRITE_INTERNAL_CURRENT_SET
+  }
+  optional CurrentSetSource current_set_source = 1;
+
+  enum EnableSource {
+    ENABLE_SOURCE_UNSPECIFIED = 0;
+    EXTERNAL_PIN = 1; // -> SF8XXX_NM_DRIVER_STATE_WRITE_EXTERNAL_ENABLE
+    INTERNAL_CMD = 2; // -> SF8XXX_NM_DRIVER_STATE_WRITE_INTERNAL_ENABLE
+  }
+  optional EnableSource enable_source = 2;
+
+  enum InterlockPolicy {
+    INTERLOCK_POLICY_UNSPECIFIED = 0;
+    ALLOW = 1; // -> SF8XXX_NM_DRIVER_STATE_WRITE_ALLOW_INTERLOCK
+    DENY = 2;  // -> SF8XXX_NM_DRIVER_STATE_WRITE_DENY_INTERLOCK
+  }
+  optional InterlockPolicy interlock_policy = 3;
+
+  enum NtcInterlockPolicy {
+    NTC_INTERLOCK_POLICY_UNSPECIFIED = 0;
+    ALLOW_NTC = 1; // -> SF8XXX_NM_DRIVER_STATE_WRITE_ALLOW_EXT_NTC_INTERLOCK
+    DENY_NTC = 2;  // -> SF8XXX_NM_DRIVER_STATE_WRITE_DENY_EXT_NTC_INTERLOCK
+  }
+  optional NtcInterlockPolicy ntc_interlock_policy = 4;
+}
+
+// Управление состоянием TEC. Аналогично `DriverStateSettings`.
+message TecStateSettings {
+  enum TempSetSource {
+    TEMP_SET_SOURCE_UNSPECIFIED = 0;
+    EXTERNAL = 1; // -> SF8XXX_NM_TEC_STATE_WRITE_EXTERNAL_TEMP_SET
+    INTERNAL = 2; // -> SF8XXX_NM_TEC_STATE_WRITE_INTERNAL_TEMP_SET
+  }
+  optional TempSetSource temp_set_source = 1;
+
+  enum EnableSource {
+    ENABLE_SOURCE_UNSPECIFIED = 0;
+    EXTERNAL_PIN = 1; // -> SF8XXX_NM_TEC_STATE_WRITE_EXTERNAL_ENABLE
+    INTERNAL_CMD = 2; // -> SF8XXX_NM_TEC_STATE_WRITE_INTERNAL_ENABLE
+  }
+  optional EnableSource enable_source = 2;
+}
+
+// ===============================================================
+// 3. Команды Запроса (Получение данных)
+// ===============================================================
+
+// Позволяет запросить несколько параметров за один раз.
+message RequestCommand {
+  repeated RequestType requests = 1;
+}
+
+// Перечисление всех возможных данных для запроса.
+// Для каждого запроса указана соответствующая `get_*` функция из C-библиотеки.
+enum RequestType {
+  REQ_UNSPECIFIED = 0;
+
+  // --- LDD Parameters ---
+  // Запрос REQ_LDD_STATUS_ALL заставит МК вызвать все `get_*` функции для LDD
+  // и заполнить все поля в ответном сообщении `LddStatus`.
+  REQ_LDD_STATUS_ALL = 1;
+  REQ_FREQUENCY_HZ = 2;                     // -> sf8xxx_nm_get_freq()
+  REQ_FREQUENCY_MIN_HZ = 3;                 // -> sf8xxx_nm_get_freq_min()
+  REQ_FREQUENCY_MAX_HZ = 4;                 // -> sf8xxx_nm_get_freq_max()
+  REQ_DURATION_MS = 5;                      // -> sf8xxx_nm_get_duration()
+  REQ_DURATION_MIN_MS = 6;                  // -> sf8xxx_nm_get_duration_min()
+  REQ_DURATION_MAX_MS = 7;                  // -> sf8xxx_nm_get_duration_max()
+  REQ_CURRENT_MA = 8;                       // -> sf8xxx_nm_get_current()
+  REQ_CURRENT_MIN_MA = 9;                   // -> sf8xxx_nm_get_current_min()
+  REQ_CURRENT_MAX_MA = 10;                  // -> sf8xxx_nm_get_current_max()
+  REQ_CURRENT_MAX_LIMIT_MA = 11;            // -> sf8xxx_nm_get_current_max_limit()
+  REQ_MEASURED_CURRENT_MA = 12;             // -> sf8xxx_nm_get_measured_current()
+  REQ_CURRENT_PROTECTION_THRESHOLD_MA = 13; // -> sf8xxx_nm_get_current_protection_threshold()
+  REQ_CURRENT_CALIBRATION_PERCENT = 14;     // -> sf8xxx_nm_get_calibration_current()
+  REQ_MEASURED_VOLTAGE_V = 15;              // -> sf8xxx_nm_get_measured_voltage()
+
+  // --- TEC Parameters ---
+  // Аналогично REQ_LDD_STATUS_ALL, но для TEC и сообщения `TecStatus`.
+  REQ_TEC_STATUS_ALL = 20;
+  REQ_TEC_TEMPERATURE_CELSIUS = 21;           // -> sf8xxx_nm_get_tec_temp()
+  REQ_TEC_TEMPERATURE_MAX_CELSIUS = 22;       // -> sf8xxx_nm_get_tec_temp_max()
+  REQ_TEC_TEMPERATURE_MIN_CELSIUS = 23;       // -> sf8xxx_nm_get_tec_temp_min()
+  REQ_TEC_TEMPERATURE_MAX_LIMIT_CELSIUS = 24; // -> sf8xxx_nm_get_tec_temp_max_limit()
+  REQ_TEC_TEMPERATURE_MIN_LIMIT_CELSIUS = 25; // -> sf8xxx_nm_get_tec_temp_min_limit()
+  REQ_TEC_MEASURED_TEMPERATURE_CELSIUS = 26;  // -> sf8xxx_nm_get_tec_temp_measured()
+  REQ_TEC_MEASURED_CURRENT_A = 27;            // -> sf8xxx_nm_get_tec_measured_current()
+  REQ_TEC_CURRENT_LIMIT_A = 28;               // -> sf8xxx_nm_get_tec_current_limit()
+  REQ_TEC_MEASURED_VOLTAGE_V = 29;            // -> sf8xxx_nm_get_tec_measured_voltage()
+  REQ_TEC_CALIBRATION_PERCENT = 30;           // -> sf8xxx_nm_get_tec_calibration_current()
+
+  // --- PID Coefficients ---
+  // Запрос REQ_PID_COEFFICIENTS заполняет поля p/i/d_coefficient в `TecStatus`.
+  // sf8xxx_nm_get_p_coefficient(), sf8xxx_nm_get_i_coefficient(), sf8xxx_nm_get_d_coefficient()
+  REQ_PID_COEFFICIENTS = 40;
+  
+  // --- NTC Interlock ---
+  // Запрос REQ_EXTERNAL_NTC_ALL заполняет поля external_ntc_* в `TecStatus`.
+  REQ_EXTERNAL_NTC_ALL = 50;
+  REQ_EXTERNAL_NTC_LOWER_LIMIT_CELSIUS = 51; // -> sf8xxx_nm_get_external_ntc_temp_lower_limit()
+  REQ_EXTERNAL_NTC_UPPER_LIMIT_CELSIUS = 52; // -> sf8xxx_nm_get_external_ntc_temp_upper_limit()
+  REQ_EXTERNAL_NTC_MEASURED_TEMP_CELSIUS = 53; // -> sf8xxx_nm_get_external_ntc_temp_measured()
+  
+  // --- Status & Info ---
+  REQ_DRIVER_STATE = 60;   // -> sf8xxx_nm_get_driver_state()
+  REQ_TEC_STATE = 61;      // -> sf8xxx_nm_get_tec_state()
+  REQ_LOCK_STATUS = 62;    // -> sf8xxx_nm_get_lock_status()
+  REQ_SERIAL_NUMBER = 63;  // -> sf8xxx_nm_get_serial_number()
+}
+
+// ===============================================================
+// 4. Команды Действия (Немедленное выполнение)
+// ===============================================================
+
+// Команда для выполнения действий, не требующих числовых параметров.
+message ActionCommand {
+  ActionType type = 1;
+}
+
+// Перечисление всех возможных действий.
+enum ActionType {
+  ACTION_UNSPECIFIED = 0;
+
+  // -> sf8xxx_nm_set_driver_state(SF8XXX_NM_DRIVER_STATE_WRITE_START)
+  START_DRIVER = 1;
+  // -> sf8xxx_nm_set_driver_state(SF8XXX_NM_DRIVER_STATE_WRITE_STOP)
+  STOP_DRIVER = 2;
+  // -> sf8xxx_nm_set_tec_state(SF8XXX_NM_TEC_STATE_WRITE_START)
+  START_TEC = 3;
+  // -> sf8xxx_nm_set_tec_state(SF8XXX_NM_TEC_STATE_WRITE_STOP)
+  STOP_TEC = 4;
+  // -> sf8xxx_nm_save_parameters()
+  SAVE_PARAMETERS = 5;
+  // -> sf8xxx_nm_reset_parameters()
+  RESET_PARAMETERS = 6;
+}
+
+// ===============================================================
+// 5. Структуры для Ответных Сообщений
+// ===============================================================
+
+// Агрегатор всех считываемых параметров LDD.
+// МК заполняет поля этого сообщения, вызывая соответствующие `get_*` функции.
+message LddStatus {
+  float frequency_hz = 1; // sf8xxx_nm_get_freq
+  float frequency_min_hz = 2; // sf8xxx_nm_get_freq_min
+  float frequency_max_hz = 3; // sf8xxx_nm_get_freq_max
+  float duration_ms = 4; // sf8xxx_nm_get_duration
+  float duration_min_ms = 5; // sf8xxx_nm_get_duration_min
+  float duration_max_ms = 6; // sf8xxx_nm_get_duration_max
+  float current_ma = 7; // sf8xxx_nm_get_current
+  float current_min_ma = 8; // sf8xxx_nm_get_current_min
+  float current_max_ma = 9; // sf8xxx_nm_get_current_max
+  float current_max_limit_ma = 10; // sf8xxx_nm_get_current_max_limit
+  float measured_current_ma = 11; // sf8xxx_nm_get_measured_current
+  float current_protection_threshold_ma = 12; // sf8xxx_nm_get_current_protection_threshold
+  float current_calibration_percent = 13; // sf8xxx_nm_get_calibration_current
+  float measured_voltage_v = 14; // sf8xxx_nm_get_measured_voltage
+}
+
+// Агрегатор всех считываемых параметров TEC.
+message TecStatus {
+  float temperature_celsius = 1; // sf8xxx_nm_get_tec_temp
+  float temp_max_celsius = 2; // sf8xxx_nm_get_tec_temp_max
+  float temp_min_celsius = 3; // sf8xxx_nm_get_tec_temp_min
+  float temp_max_limit_celsius = 4; // sf8xxx_nm_get_tec_temp_max_limit
+  float temp_min_limit_celsius = 5; // sf8xxx_nm_get_tec_temp_min_limit
+  float measured_temperature_celsius = 6; // sf8xxx_nm_get_tec_temp_measured
+  float measured_current_a = 7; // sf8xxx_nm_get_tec_measured_current
+  float current_limit_a = 8; // sf8xxx_nm_get_tec_current_limit
+  float measured_voltage_v = 9; // sf8xxx_nm_get_tec_measured_voltage
+  float calibration_percent = 10; // sf8xxx_nm_get_tec_calibration_current
+  uint32 p_coefficient = 11; // sf8xxx_nm_get_p_coefficient
+  uint32 i_coefficient = 12; // sf8xxx_nm_get_i_coefficient
+  uint32 d_coefficient = 13; // sf8xxx_nm_get_d_coefficient
+  float external_ntc_lower_limit_celsius = 14; // sf8xxx_nm_get_external_ntc_temp_lower_limit
+  float external_ntc_upper_limit_celsius = 15; // sf8xxx_nm_get_external_ntc_temp_upper_limit
+  float external_ntc_measured_temp_celsius = 16; // sf8xxx_nm_get_external_ntc_temp_measured
+}
+
+// Расшифрованное состояние драйвера LDD.
+// МК получает это из структуры `sf8xxx_nm_driver_state_info_t` после вызова `sf8xxx_nm_get_driver_state()`.
+message DriverStateInfo {
+  bool is_powered_on = 1; // -> sf8xxx_nm_driver_state_info_t.is_powered_on
+  bool is_started = 2; // -> sf8xxx_nm_driver_state_info_t.is_started
+  bool current_set_is_internal = 3; // -> sf8xxx_nm_driver_state_info_t.current_set_internal
+  bool enable_is_internal = 4; // -> sf8xxx_nm_driver_state_info_t.enable_internal
+  bool ext_ntc_interlock_is_denied = 5; // -> sf8xxx_nm_driver_state_info_t.ext_ntc_interlock_denied
+  bool interlock_is_denied = 6; // -> sf8xxx_nm_driver_state_info_t.interlock_denied
+}
+
+// Расшифрованное состояние TEC.
+// МК получает это из структуры `sf8xxx_nm_tec_state_info_t` после вызова `sf8xxx_nm_get_tec_state()`.
+message TecStateInfo {
+  bool is_started = 1; // -> sf8xxx_nm_tec_state_info_t.is_started
+  bool temp_set_is_internal = 2; // -> sf8xxx_nm_tec_state_info_t.temp_set_internal
+  bool enable_is_internal = 3; // -> sf8xxx_nm_tec_state_info_t.enable_internal
+}
+
+// Расшифрованное состояние блокировок.
+// МК получает это из структуры `sf8xxx_nm_lock_status_info_t` после вызова `sf8xxx_nm_get_lock_status()`.
+message LockStatusInfo {
+  bool interlock_active = 1; // -> sf8xxx_nm_lock_status_info_t.interlock
+  bool ld_over_current = 2; // -> sf8xxx_nm_lock_status_info_t.ld_over_current
+  bool ld_overheat = 3; // -> sf8xxx_nm_lock_status_info_t.ld_overheat
+  bool ext_ntc_interlock_active = 4; // -> sf8xxx_nm_lock_status_info_t.ext_ntc_interlock
+  bool tec_error = 5; // -> sf8xxx_nm_lock_status_info_t.tec_error
+  bool tec_self_heat = 6; // -> sf8xxx_nm_lock_status_info_t.tec_self_heat
+}
+
+// Коды ошибок, соответствующие `sf8xxx_nm_err_t`.
+// 0 зарезервировано для "нет ошибки".
+enum ErrorCode {
+  ERROR_UNSPECIFIED = 0;
+  ERROR_SERIAL_PROTOCOL = 1;
+  ERROR_PARAMETER_OUT_OF_RANGE = 2;
+  ERROR_UNKNOWN_COMMAND = 3;
+  ERROR_INTERNAL_PROBLEM = 4;
+  ERROR_LD_OVERCURRENT = 5;
+  ERROR_LD_OVERHEAT = 6;
+  ERROR_EXTERNAL_NTC_INTERLOCK = 7;
+  ERROR_TEC_ERROR = 8;
+  ERROR_TEC_SELF_HEAT = 9;
+  ERROR_INTERLOCK_INPUT = 10;
+  ERROR_FIRMWARE_UPDATE = 11;
+  ERROR_NO_LD_CONNECTED = 12;
+  ERROR_NO_EXTERNAL_NTC_CONNECTED = 13;
+  ERROR_COMMUNICATION_TIMEOUT = 14;
+  ERROR_PARSE = 15;
+  ERROR_RESERVED = 16;
+}
