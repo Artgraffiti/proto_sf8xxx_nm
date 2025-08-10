@@ -5,4 +5,4 @@
 cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(grpc_sf8xxx_nm)
+project(proto_sf8xxx_nm)
